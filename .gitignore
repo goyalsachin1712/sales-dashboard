@@ -38,3 +38,10 @@ htmlcov/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Local backups and rollback copies
+backups/
+
+# Temporary files
+*.tmp
+*.bak

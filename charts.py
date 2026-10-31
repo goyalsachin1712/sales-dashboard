@@ -1,6 +1,18 @@
+from metrics import calculate_weighted_discount, parse_on_time_delivery
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
+
+# Shared professional blue gradient for profitability charts
+PROFESSIONAL_BLUE_SCALE = [
+    [0.00, "#6F8FAF"],
+    [0.25, "#587FA3"],
+    [0.50, "#416F96"],
+    [0.75, "#2D5C82"],
+    [1.00, "#1B4568"],
+]
 
 
 def _to_millions(values):
@@ -15,14 +27,7 @@ def _safe_ratio(numerator, denominator):
 
 
 def monthly_sales_chart(monthly):
-    """
-    Plot monthly actual sales and, when supplied, monthly sales targets.
-
-    Expected columns:
-      - Month_Start
-      - actual_sales
-      - optional sales_target
-    """
+    """Plot monthly actual sales and, when supplied, monthly sales targets."""
     fig = go.Figure()
 
     if monthly.empty:
@@ -82,12 +87,7 @@ def monthly_sales_chart(monthly):
 
 
 def regional_performance_chart(sales):
-    """
-    Compare regional sales and profitability.
-
-    Bar height represents Net Sales. Hover details include Gross Profit,
-    Gross Margin, transaction-line count and distinct orders.
-    """
+    """Compare regional sales and profitability."""
     required = {"Region", "Net_Sales_INR", "Gross_Profit_INR"}
     if sales.empty or not required.issubset(sales.columns):
         return go.Figure().update_layout(title="Regional Performance")
@@ -97,10 +97,12 @@ def regional_performance_chart(sales):
         .agg(
             Net_Sales_INR=("Net_Sales_INR", "sum"),
             Gross_Profit_INR=("Gross_Profit_INR", "sum"),
-            Orders=("Order_ID", "nunique") if "Order_ID" in sales.columns
+            Orders=("Order_ID", "nunique")
+            if "Order_ID" in sales.columns
             else ("Net_Sales_INR", "size"),
         )
     )
+
     regional["Gross_Margin_Pct"] = _safe_ratio(
         regional["Gross_Profit_INR"], regional["Net_Sales_INR"]
     )
@@ -113,7 +115,7 @@ def regional_performance_chart(sales):
         x="Region",
         y="Net_Sales_M",
         color="Gross_Margin_Pct",
-        color_continuous_scale="Blues",
+        color_continuous_scale=PROFESSIONAL_BLUE_SCALE,
         custom_data=[
             "Net_Sales_M",
             "Gross_Profit_M",
@@ -127,6 +129,7 @@ def regional_performance_chart(sales):
             "Gross_Margin_Pct": "Gross Margin (%)",
         },
     )
+
     fig.update_traces(
         hovertemplate=(
             "<b>%{x}</b><br>"
@@ -137,6 +140,7 @@ def regional_performance_chart(sales):
             "<extra></extra>"
         )
     )
+
     fig.update_layout(
         yaxis_title="Net Sales (₹ Millions)",
         coloraxis_colorbar_title="Gross Margin (%)",
@@ -159,6 +163,7 @@ def product_performance_chart(sales):
         "Gross_Profit_INR",
         "Units",
     }
+
     if sales.empty or not required.issubset(sales.columns):
         return go.Figure().update_layout(title="Product Category Performance")
 
@@ -167,15 +172,21 @@ def product_performance_chart(sales):
         "Gross_Profit_INR": ("Gross_Profit_INR", "sum"),
         "Units": ("Units", "sum"),
     }
+
     if "Return_Amount_INR" in sales.columns:
         aggregations["Return_Amount_INR"] = ("Return_Amount_INR", "sum")
+
     if "Order_ID" in sales.columns:
         aggregations["Orders"] = ("Order_ID", "nunique")
 
-    products = sales.groupby("Product_Category", as_index=False).agg(**aggregations)
+    products = sales.groupby("Product_Category", as_index=False).agg(
+        **aggregations
+    )
+
     products["Gross_Margin_Pct"] = _safe_ratio(
         products["Gross_Profit_INR"], products["Net_Sales_INR"]
     )
+
     if "Return_Amount_INR" in products.columns:
         products["Return_Rate_Pct"] = _safe_ratio(
             products["Return_Amount_INR"], products["Net_Sales_INR"]
@@ -186,21 +197,26 @@ def product_performance_chart(sales):
     products = products.sort_values("Net_Sales_INR", ascending=False)
     products["Net_Sales_M"] = _to_millions(products["Net_Sales_INR"])
     products["Gross_Profit_M"] = _to_millions(products["Gross_Profit_INR"])
+
     if "Return_Amount_INR" in products.columns:
-        products["Return_Amount_M"] = _to_millions(products["Return_Amount_INR"])
+        products["Return_Amount_M"] = _to_millions(
+            products["Return_Amount_INR"]
+        )
 
     fig = px.bar(
         products,
         x="Product_Category",
         y="Net_Sales_M",
         color="Gross_Margin_Pct",
-        color_continuous_scale="Teal",
+        color_continuous_scale=PROFESSIONAL_BLUE_SCALE,
         custom_data=[
             "Net_Sales_M",
             "Gross_Profit_M",
             "Gross_Margin_Pct",
             "Units",
-            "Return_Amount_M" if "Return_Amount_M" in products.columns else "Net_Sales_M",
+            "Return_Amount_M"
+            if "Return_Amount_M" in products.columns
+            else "Net_Sales_M",
             "Return_Rate_Pct",
         ],
         title="Product Category Sales and Profitability",
@@ -210,10 +226,13 @@ def product_performance_chart(sales):
             "Gross_Margin_Pct": "Gross Margin (%)",
         },
     )
+
     return_label = (
         "Return Amount: ₹%{customdata[4]:,.2f}M<br>"
-        if "Return_Amount_INR" in products.columns else ""
+        if "Return_Amount_INR" in products.columns
+        else ""
     )
+
     fig.update_traces(
         hovertemplate=(
             "<b>%{x}</b><br>"
@@ -226,6 +245,7 @@ def product_performance_chart(sales):
             "<extra></extra>"
         )
     )
+
     fig.update_layout(
         xaxis_title="Product Category",
         yaxis_title="Net Sales (₹ Millions)",
@@ -237,18 +257,13 @@ def product_performance_chart(sales):
 
 
 def representative_performance_chart(sales):
-    """
-    Show the top 15 sales representatives by Net Sales.
-
-    Gross Profit, Gross Margin, weighted Discount % and distinct orders
-    are included in hover details. The chart is not a
-    target-attainment ranking.
-    """
+    """Show the top 15 sales representatives by Net Sales."""
     required = {
         "Sales_Rep",
         "Net_Sales_INR",
         "Gross_Profit_INR",
     }
+
     if sales.empty or not required.issubset(sales.columns):
         return go.Figure().update_layout(title="Representative Performance")
 
@@ -257,40 +272,29 @@ def representative_performance_chart(sales):
         .agg(
             Net_Sales_INR=("Net_Sales_INR", "sum"),
             Gross_Profit_INR=("Gross_Profit_INR", "sum"),
-            **({"Orders": ("Order_ID", "nunique")} if "Order_ID" in sales.columns else {}),
+            **(
+                {"Orders": ("Order_ID", "nunique")}
+                if "Order_ID" in sales.columns
+                else {}
+            ),
         )
     )
+
     reps["Gross_Margin_Pct"] = _safe_ratio(
         reps["Gross_Profit_INR"], reps["Net_Sales_INR"]
     )
 
-    # Calculate weighted discount using list value as the weight, not a
-    # simple average of row-level discount percentages.
+    # Weighted discount based on list value.
     if {
-        "Discount_Pct", "List_Unit_Price_INR", "Units"
+        "Discount_Pct",
+        "List_Unit_Price_INR",
+        "Units",
     }.issubset(sales.columns):
-        working = sales.copy()
-        working["_List_Value"] = (
-            working["List_Unit_Price_INR"] * working["Units"]
-        )
-        working["_Discounted_List_Value"] = (
-            working["_List_Value"] * working["Discount_Pct"]
-        )
-        discount = (
-            working.groupby("Sales_Rep")
-            .agg(
-                _List_Value=("_List_Value", "sum"),
-                _Discounted_List_Value=("_Discounted_List_Value", "sum"),
-            )
-        )
-        discount["Weighted_Discount_Pct"] = _safe_ratio(
-            discount["_Discounted_List_Value"], discount["_List_Value"]
+        discount = calculate_weighted_discount(
+            sales, groupby="Sales_Rep"
         )
         reps = reps.merge(
-            discount[["Weighted_Discount_Pct"]],
-            left_on="Sales_Rep",
-            right_index=True,
-            how="left",
+            discount, on="Sales_Rep", how="left", validate="one_to_one"
         )
 
     reps = reps.nlargest(15, "Net_Sales_INR").sort_values("Net_Sales_INR")
@@ -301,8 +305,10 @@ def representative_performance_chart(sales):
         "Gross_Profit_M",
         "Gross_Margin_Pct",
     ]
+
     if "Orders" in reps.columns:
         custom_fields.append("Orders")
+
     if "Weighted_Discount_Pct" in reps.columns:
         custom_fields.append("Weighted_Discount_Pct")
 
@@ -312,7 +318,7 @@ def representative_performance_chart(sales):
         y="Sales_Rep",
         orientation="h",
         color="Gross_Margin_Pct",
-        color_continuous_scale="Teal",
+        color_continuous_scale=PROFESSIONAL_BLUE_SCALE,
         custom_data=["Net_Sales_M"] + custom_fields,
         labels={
             "Net_Sales_M": "Net Sales (₹ Millions)",
@@ -327,13 +333,24 @@ def representative_performance_chart(sales):
         "Gross Profit: ₹%{customdata[1]:,.2f}M<br>"
         "Gross Margin: %{customdata[2]:.2f}%<br>"
     )
+
     index = 3
+
     if "Orders" in reps.columns:
-        hover += "Distinct orders: %{customdata[" + str(index) + "]:,}<br>"
+        hover += (
+            "Distinct orders: %{customdata[" + str(index) + "]:,}<br>"
+        )
         index += 1
+
     if "Weighted_Discount_Pct" in reps.columns:
-        hover += "Weighted discount: %{customdata[" + str(index) + "]:.2f}%<br>"
+        hover += (
+            "Weighted discount: %{customdata["
+            + str(index)
+            + "]:.2f}%<br>"
+        )
+
     fig.update_traces(hovertemplate=hover + "<extra></extra>")
+
     fig.update_layout(
         xaxis_title="Net Sales (₹ Millions)",
         yaxis_title="Sales Representative",
@@ -345,20 +362,22 @@ def representative_performance_chart(sales):
 
 
 def regional_channel_delivery_chart(sales):
-    """
-    Heatmap of line-level on-time delivery rate by Region and Channel.
+    """Heatmap of line-level on-time delivery rate by Region and Channel."""
+    required = {
+        "Region",
+        "Channel",
+        "On_Time_Delivery_Flag",
+    }
 
-    The percentage is calculated from On_Time_Delivery_Flag == 'Yes'.
-    Hover details include the number of transaction lines in each cell.
-    This is a line-level metric, not an order-level metric.
-    """
-    required = {"Region", "Channel", "On_Time_Delivery_Flag"}
     if sales.empty or not required.issubset(sales.columns):
-        return go.Figure().update_layout(title="On-Time Delivery by Region and Channel")
+        return go.Figure().update_layout(
+            title="On-Time Delivery by Region and Channel"
+        )
 
     working = sales.copy()
-    flag = working["On_Time_Delivery_Flag"].astype(str).str.strip().str.lower()
-    working["_On_Time"] = flag.isin(["yes", "y", "true", "1"])
+    working["_On_Time"] = parse_on_time_delivery(
+        working["On_Time_Delivery_Flag"]
+    )
 
     summary = (
         working.groupby(["Region", "Channel"], as_index=False)
@@ -370,10 +389,14 @@ def regional_channel_delivery_chart(sales):
     summary["On_Time_Rate_Pct"] = summary["On_Time_Rate"] * 100
 
     pivot_rate = summary.pivot(
-        index="Region", columns="Channel", values="On_Time_Rate_Pct"
+        index="Region",
+        columns="Channel",
+        values="On_Time_Rate_Pct",
     )
     pivot_count = summary.pivot(
-        index="Region", columns="Channel", values="Transaction_Lines"
+        index="Region",
+        columns="Channel",
+        values="Transaction_Lines",
     )
 
     fig = go.Figure(
@@ -397,6 +420,7 @@ def regional_channel_delivery_chart(sales):
             ),
         )
     )
+
     fig.update_layout(
         title="On-Time Delivery by Region and Channel",
         xaxis_title="Sales Channel",
@@ -407,27 +431,25 @@ def regional_channel_delivery_chart(sales):
 
 
 def product_returns_profitability_chart(sales):
-    """
-    Compare product subcategories by gross margin and return rate by value.
-
-    Each bubble represents a Product_Subcategory. Bubble size represents
-    Net Sales. Return rate = Return_Amount_INR / Net_Sales_INR * 100.
-    Hover details include sales, gross profit, return amount and distinct products.
-    """
+    """Compare product subcategories by gross margin and return rate."""
     required = {
         "Product_Subcategory",
         "Net_Sales_INR",
         "Gross_Profit_INR",
         "Return_Amount_INR",
     }
+
     if sales.empty or not required.issubset(sales.columns):
-        return go.Figure().update_layout(title="Product Returns vs Profitability")
+        return go.Figure().update_layout(
+            title="Product Returns vs Profitability"
+        )
 
     aggregations = {
         "Net_Sales_INR": ("Net_Sales_INR", "sum"),
         "Gross_Profit_INR": ("Gross_Profit_INR", "sum"),
         "Return_Amount_INR": ("Return_Amount_INR", "sum"),
     }
+
     if "Product" in sales.columns:
         aggregations["Products"] = ("Product", "nunique")
 
@@ -435,15 +457,19 @@ def product_returns_profitability_chart(sales):
         sales.groupby("Product_Subcategory", as_index=False)
         .agg(**aggregations)
     )
+
     summary["Gross_Margin_Pct"] = _safe_ratio(
         summary["Gross_Profit_INR"], summary["Net_Sales_INR"]
     )
     summary["Return_Rate_Pct"] = _safe_ratio(
         summary["Return_Amount_INR"], summary["Net_Sales_INR"]
     )
+
     summary["Net_Sales_M"] = _to_millions(summary["Net_Sales_INR"])
     summary["Gross_Profit_M"] = _to_millions(summary["Gross_Profit_INR"])
-    summary["Return_Amount_M"] = _to_millions(summary["Return_Amount_INR"])
+    summary["Return_Amount_M"] = _to_millions(
+        summary["Return_Amount_INR"]
+    )
 
     fig = px.scatter(
         summary,
@@ -465,6 +491,7 @@ def product_returns_profitability_chart(sales):
             "Net_Sales_INR": "Net Sales (INR; bubble size)",
         },
     )
+
     hover = (
         "<b>%{hovertext}</b><br>"
         "Gross Margin: %{x:.2f}%<br>"
@@ -473,17 +500,25 @@ def product_returns_profitability_chart(sales):
         "Gross Profit: ₹%{customdata[1]:,.2f}M<br>"
         "Return Amount: ₹%{customdata[2]:,.2f}M<br>"
     )
+
     if "Products" in summary.columns:
         hover += "Distinct products: %{customdata[3]:,}<br>"
+
     fig.update_traces(hovertemplate=hover + "<extra></extra>")
+
     overall_margin = (
-        sales["Gross_Profit_INR"].sum() / sales["Net_Sales_INR"].sum() * 100
-        if sales["Net_Sales_INR"].sum() else 0
+        sales["Gross_Profit_INR"].sum()
+        / sales["Net_Sales_INR"].sum() * 100
+        if sales["Net_Sales_INR"].sum()
+        else 0
     )
     overall_return_rate = (
-        sales["Return_Amount_INR"].sum() / sales["Net_Sales_INR"].sum() * 100
-        if sales["Net_Sales_INR"].sum() else 0
+        sales["Return_Amount_INR"].sum()
+        / sales["Net_Sales_INR"].sum() * 100
+        if sales["Net_Sales_INR"].sum()
+        else 0
     )
+
     fig.add_vline(
         x=overall_margin,
         line_dash="dash",
@@ -498,10 +533,207 @@ def product_returns_profitability_chart(sales):
         annotation_text=f"Overall return {overall_return_rate:.1f}%",
         annotation_position="top left",
     )
+
     fig.update_layout(
         xaxis_title="Gross Margin (%)",
         yaxis_title="Return Rate by Value (%)",
         legend_title="Subcategory",
         margin=dict(l=20, r=20, t=60, b=20),
+    )
+    return fig
+
+
+def geographic_performance_chart(summary, dimension):
+    """Compare geographic units using net sales and gross margin."""
+    if summary.empty or dimension not in summary.columns:
+        return go.Figure()
+
+    data = summary.sort_values("Net_Sales_M", ascending=True).copy()
+
+    fig = px.bar(
+        data,
+        x="Net_Sales_M",
+        y=dimension,
+        orientation="h",
+        color="Gross_Margin_Pct",
+        color_continuous_scale=PROFESSIONAL_BLUE_SCALE,
+        custom_data=[
+            "Gross_Profit_M",
+            "Gross_Margin_Pct",
+            "Return_Rate_Pct",
+            "On_Time_Pct",
+            "Orders",
+            "Customers",
+        ],
+        labels={
+            "Net_Sales_M": "Net Sales (₹ Millions)",
+            dimension: dimension,
+            "Gross_Margin_Pct": "Gross Margin (%)",
+        },
+    )
+
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Net Sales: ₹%{x:,.2f}M<br>"
+            "Gross Profit: ₹%{customdata[0]:,.2f}M<br>"
+            "Gross Margin: %{customdata[1]:.2f}%<br>"
+            "Return Rate: %{customdata[2]:.2f}%<br>"
+            "On-Time Delivery: %{customdata[3]:.2f}%<br>"
+            "Orders: %{customdata[4]:,}<br>"
+            "Customers: %{customdata[5]:,}"
+            "<extra></extra>"
+        )
+    )
+
+    fig.update_layout(
+        xaxis_title="Net Sales (₹ Millions)",
+        yaxis_title="",
+        coloraxis_colorbar_title="Gross Margin (%)",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    fig.update_xaxes(tickformat=",.0f", rangemode="tozero")
+    return fig
+
+
+def product_drilldown_chart(summary, dimension):
+    """Compare product hierarchy units by sales, coloured by gross margin."""
+    required = {
+        dimension,
+        "Net_Sales_M",
+        "Gross_Profit_M",
+        "Gross_Margin_Pct",
+        "Return_Rate_Pct",
+        "Units",
+        "Orders",
+    }
+    if summary.empty or not required.issubset(summary.columns):
+        return go.Figure()
+
+    data = summary.sort_values("Net_Sales_M", ascending=True).copy()
+    fig = px.bar(
+        data,
+        x="Net_Sales_M",
+        y=dimension,
+        orientation="h",
+        color="Gross_Margin_Pct",
+        color_continuous_scale=PROFESSIONAL_BLUE_SCALE,
+        custom_data=[
+            "Gross_Profit_M",
+            "Gross_Margin_Pct",
+            "Return_Amount_M",
+            "Return_Rate_Pct",
+            "Units",
+            "Orders",
+            "Lines",
+        ],
+        labels={
+            "Net_Sales_M": "Net Sales (₹ Millions)",
+            dimension: dimension.replace("_", " "),
+            "Gross_Margin_Pct": "Gross Margin (%)",
+        },
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Net Sales: ₹%{x:,.2f}M<br>"
+            "Gross Profit: ₹%{customdata[0]:,.2f}M<br>"
+            "Gross Margin: %{customdata[1]:.2f}%<br>"
+            "Return Amount: ₹%{customdata[2]:,.2f}M<br>"
+            "Return Rate: %{customdata[3]:.2f}%<br>"
+            "Units: %{customdata[4]:,}<br>"
+            "Distinct orders: %{customdata[5]:,}<br>"
+            "Transaction lines: %{customdata[6]:,}"
+            "<extra></extra>"
+        )
+    )
+    fig.update_layout(
+        xaxis_title="Net Sales (₹ Millions)",
+        yaxis_title="",
+        coloraxis_colorbar_title="Gross Margin (%)",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    fig.update_xaxes(tickformat=",.0f", rangemode="tozero")
+    return fig
+
+
+def discount_band_performance_chart(summary):
+    """Show sales and gross margin across discount bands."""
+    required = {
+        "Discount_Band",
+        "Net_Sales_M",
+        "Gross_Margin_Pct",
+        "Weighted_Discount_Pct",
+        "Lines",
+    }
+    if summary.empty or not required.issubset(summary.columns):
+        return go.Figure().update_layout(title="Discount Band Performance")
+
+    data = summary.copy()
+    data["Discount_Band"] = pd.Categorical(
+        data["Discount_Band"],
+        categories=["0–5%", ">5–10%", ">10–15%", ">15–20%", ">20%"],
+        ordered=True,
+    )
+    data = data.sort_values("Discount_Band")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=data["Discount_Band"].astype(str),
+            y=data["Net_Sales_M"],
+            name="Net Sales",
+            marker_color="#587FA3",
+            yaxis="y",
+            customdata=data[
+                ["Gross_Margin_Pct", "Weighted_Discount_Pct", "Lines"]
+            ].to_numpy(),
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Net Sales: ₹%{y:,.2f}M<br>"
+                "Gross Margin: %{customdata[0]:.2f}%<br>"
+                "Weighted Discount: %{customdata[1]:.2f}%<br>"
+                "Transaction lines: %{customdata[2]:,}"
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=data["Discount_Band"].astype(str),
+            y=data["Gross_Margin_Pct"],
+            name="Gross Margin",
+            mode="lines+markers+text",
+            text=data["Gross_Margin_Pct"].map(
+                lambda value: f"{value:.1f}%"
+            ),
+            textposition="top center",
+            yaxis="y2",
+            line=dict(color="#1B4568", width=3),
+            hovertemplate="Gross Margin: %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title="Discount Band: Sales and Gross Margin",
+        xaxis_title="Discount Band",
+        yaxis=dict(
+            title="Net Sales (₹ Millions)",
+            rangemode="tozero",
+        ),
+        yaxis2=dict(
+            title="Gross Margin (%)",
+            overlaying="y",
+            side="right",
+            rangemode="tozero",
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+        margin=dict(l=20, r=20, t=80, b=20),
+        hovermode="x unified",
     )
     return fig

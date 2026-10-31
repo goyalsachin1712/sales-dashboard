@@ -5,14 +5,21 @@ from data import load_sales_data
 from metrics import (
     calculate_kpis,
     calculate_target_attainment,
+    summarize_performance,
+    calculate_product_performance,
+    calculate_discount_band_performance,
+    calculate_target_performance_by_dimension,
+    calculate_weighted_discount,
+    parse_on_time_delivery,
 )
 from charts import (
     monthly_sales_chart,
-    regional_performance_chart,
-    product_performance_chart,
+    geographic_performance_chart,
     representative_performance_chart,
     regional_channel_delivery_chart,
     product_returns_profitability_chart,
+    product_drilldown_chart,
+    discount_band_performance_chart,
 )
 
 
@@ -63,7 +70,9 @@ st.sidebar.subheader("Selection Filters")
 
 
 def reset_all_filters():
-    """Reset the date range and all selection filters."""
+    """Reset all global filters and local drilldown selections."""
+
+    # Global filters
     st.session_state["filter_date_range"] = (min_date, max_date)
     st.session_state["filter_region"] = regions_options.copy()
     st.session_state["filter_category"] = category_options.copy()
@@ -71,10 +80,20 @@ def reset_all_filters():
     st.session_state["filter_channel"] = channel_options.copy()
     st.session_state["filter_rep"] = []
 
+    # Geographic drilldown
+    st.session_state["geo_region_selector"] = "All regions"
+    st.session_state["geo_state_selector"] = "All states"
+    st.session_state["geo_city_selector"] = "All cities"
+
+    # Product drilldown
+    st.session_state["product_category_selector"] = "All categories"
+    st.session_state["product_subcategory_selector"] = "All subcategories"
+    st.session_state["product_item_selector"] = "All products"
+
 
 st.sidebar.button(
     "Reset All Filters",
-    use_container_width=True,
+    width="stretch",
     on_click=reset_all_filters
 )
 
@@ -330,7 +349,7 @@ else:
 # Signals are recalculated from the currently filtered data.
 # They are descriptive, not causal explanations.
 # ---------------------------------------------------------------------
-st.subheader("What Stands Out")
+st.subheader("Key Performance Observations")
 
 insights = []
 
@@ -370,16 +389,14 @@ if not region_summary.empty:
 
 if {"Region", "Channel", "On_Time_Delivery_Flag"}.issubset(filtered.columns):
     delivery_work = filtered.copy()
-    delivery_work["_on_time"] = (
+    delivery_work["_on_time"] = parse_on_time_delivery(
         delivery_work["On_Time_Delivery_Flag"]
-        .astype(str).str.strip().str.lower()
-        .isin(["yes", "y", "true", "1"])
     )
     region_delivery = delivery_work.groupby("Region")["_on_time"].mean().mul(100)
     if len(region_delivery) >= 2:
         weakest_region = region_delivery.idxmin()
         insights.append(
-            f"**Delivery risk:** {weakest_region} has the lowest line-level "
+            f"**Delivery watch:** {weakest_region} has the lowest line-level "
             f"on-time delivery rate in the selected regions "
             f"({region_delivery.loc[weakest_region]:.2f}%). "
             "Use the Region × Channel heatmap to locate the weakest channel."
@@ -387,9 +404,10 @@ if {"Region", "Channel", "On_Time_Delivery_Flag"}.issubset(filtered.columns):
     elif len(region_delivery) == 1:
         selected_region = region_delivery.index[0]
         insights.append(
-            f"**Delivery performance:** {selected_region} has a line-level "
-            f"on-time delivery rate of {region_delivery.iloc[0]:.2f}%."
-        )
+    f"**Delivery performance:** {selected_region} recorded "
+    f"{region_delivery.iloc[0]:.2f}% line-level on-time delivery "
+    "across the selected transactions."
+)
 
 if {
     "Product_Subcategory", "Net_Sales_INR", "Gross_Profit_INR",
@@ -492,25 +510,142 @@ if target_comparable and not complete_months.empty:
 
 st.plotly_chart(
     monthly_sales_chart(monthly_chart_data),
-    use_container_width=True,
+    width="stretch",
 )
 
 
 # ---------------------------------------------------------------------
-# Regional and product performance
+# Geographic drill-down (Region -> State -> City)
 # ---------------------------------------------------------------------
-st.subheader("Regional and Product Performance")
+st.subheader("Regional Sales and Profitability")
+st.caption(
+    "Explore geographic performance within the active dashboard filters. "
+    "Selections here affect only this section, not the dashboard-wide KPIs."
+)
 
-left, right = st.columns(2)
-with left:
-    st.plotly_chart(
-        regional_performance_chart(filtered),
-        use_container_width=True,
+geo_col1, geo_col2, geo_col3 = st.columns(3)
+
+def reset_geo_state_selection():
+    st.session_state["geo_state_selector"] = "All states"
+    st.session_state["geo_city_selector"] = "All cities"
+
+def reset_geo_city_selection():
+    st.session_state["geo_city_selector"] = "All cities"
+
+geo_regions = sorted(filtered["Region"].dropna().unique().tolist())
+with geo_col1:
+    selected_geo_region = st.selectbox(
+        "Explore region", ["All regions"] + geo_regions,
+        key="geo_region_selector", on_change=reset_geo_state_selection
     )
-with right:
-    st.plotly_chart(
-        product_performance_chart(filtered),
-        use_container_width=True,
+
+geo_region_data = filtered.copy()
+if selected_geo_region != "All regions":
+    geo_region_data = geo_region_data[
+        geo_region_data["Region"] == selected_geo_region
+    ]
+
+geo_states = sorted(geo_region_data["State"].dropna().unique().tolist())
+with geo_col2:
+    selected_geo_state = st.selectbox(
+        "Explore state", ["All states"] + geo_states,
+        key="geo_state_selector", on_change=reset_geo_city_selection
+    )
+
+geo_state_data = geo_region_data.copy()
+if selected_geo_state != "All states":
+    geo_state_data = geo_state_data[geo_state_data["State"] == selected_geo_state]
+
+geo_cities = sorted(geo_state_data["City"].dropna().unique().tolist())
+with geo_col3:
+    selected_geo_city = st.selectbox(
+        "Explore city", ["All cities"] + geo_cities, key="geo_city_selector"
+    )
+
+geo_data = geo_state_data.copy()
+if selected_geo_city != "All cities":
+    geo_data = geo_data[geo_data["City"] == selected_geo_city]
+
+if selected_geo_city != "All cities":
+    geo_dimension = "City"
+    geo_level_label = "City"
+elif selected_geo_state != "All states":
+    geo_dimension = "City"
+    geo_level_label = "Cities within the selected state"
+elif selected_geo_region != "All regions":
+    geo_dimension = "State"
+    geo_level_label = "States within the selected region"
+else:
+    geo_dimension = "Region"
+    geo_level_label = "Regions"
+
+geo_summary = summarize_performance(geo_data, geo_dimension)
+if selected_geo_region != "All regions" or selected_geo_state != "All states" or selected_geo_city != "All cities":
+    st.markdown(f"**{geo_level_label}**")
+st.plotly_chart(
+    geographic_performance_chart(geo_summary, geo_dimension),
+    width="stretch",
+)
+
+geo_table = geo_summary.copy()
+geo_table["Net_Sales_M"] = geo_table["Net_Sales_M"].round(2)
+geo_table["Gross_Profit_M"] = geo_table["Gross_Profit_M"].round(2)
+geo_table["Gross_Margin_Pct"] = geo_table["Gross_Margin_Pct"].round(2)
+geo_table["Return_Rate_Pct"] = geo_table["Return_Rate_Pct"].round(2)
+geo_table["On_Time_Pct"] = geo_table["On_Time_Pct"].round(2)
+
+# Region targets are comparable only at Region grain and for complete months.
+show_region_targets = (
+    target_comparable
+    and selected_geo_region == "All regions"
+    and selected_geo_state == "All states"
+    and selected_geo_city == "All cities"
+    and not complete_months.empty
+)
+if show_region_targets:
+    region_actuals = filtered[filtered["Month_Start"].isin(complete_months)]
+    region_targets = targets[
+        targets["Month_Start"].isin(complete_months)
+        & targets["Region"].isin(regions)
+        & (targets["Sales_Rep"].isin(reps) if reps else True)
+    ]
+    region_target_summary = calculate_target_performance_by_dimension(
+        region_actuals, region_targets, "Region"
+    )
+    geo_table = geo_table.merge(
+        region_target_summary[["Region", "Actual_Sales_M", "Sales_Target_M", "Sales_Gap_M", "Sales_Attainment_Pct"]],
+        left_on=geo_dimension, right_on="Region", how="left", validate="one_to_one"
+    ).rename(columns={
+        "Actual_Sales_M": "Comparable_Sales_M",
+    })
+
+geo_columns = [geo_dimension, "Net_Sales_M", "Gross_Profit_M",
+               "Gross_Margin_Pct", "Return_Rate_Pct", "On_Time_Pct",
+               "Orders", "Customers"]
+if show_region_targets:
+    geo_columns += ["Comparable_Sales_M", "Sales_Target_M", "Sales_Gap_M", "Sales_Attainment_Pct"]
+st.dataframe(
+    geo_table[geo_columns],
+    width="stretch",
+    hide_index=True,
+    column_config={
+        "Net_Sales_M": st.column_config.NumberColumn("Net Sales (₹M)", format="%.2f"),
+        "Gross_Profit_M": st.column_config.NumberColumn("Gross Profit (₹M)", format="%.2f"),
+        "Gross_Margin_Pct": st.column_config.NumberColumn("Gross Margin", format="%.2f%%"),
+        "Return_Rate_Pct": st.column_config.NumberColumn("Return Rate", format="%.2f%%"),
+        "On_Time_Pct": st.column_config.NumberColumn("On-Time Delivery", format="%.2f%%"),
+        "Comparable_Sales_M": st.column_config.NumberColumn("Comparable Sales (₹M)", format="%.2f"),
+        "Sales_Target_M": st.column_config.NumberColumn("Sales Target (₹M)", format="%.2f"),
+        "Sales_Gap_M": st.column_config.NumberColumn("Sales Gap (₹M)", format="%.2f"),
+        "Sales_Attainment_Pct": st.column_config.NumberColumn("Sales Attainment", format="%.2f%%"),
+    },
+)
+if show_region_targets:
+    st.caption("Regional target comparison uses complete calendar months only; Net Sales above reflects the full selected date range.")
+
+if selected_geo_state == "All states" and selected_geo_region == "All regions":
+    st.caption(
+        "Geographic coverage: 4 regions and 19 states."
     )
 
 
@@ -520,7 +655,7 @@ with right:
 st.subheader("Operational Performance")
 st.plotly_chart(
     regional_channel_delivery_chart(filtered),
-    use_container_width=True,
+    width="stretch",
 )
 st.caption(
     "Delivery heatmap uses transaction-line-level On_Time_Delivery_Flag. "
@@ -534,13 +669,224 @@ st.caption(
 st.subheader("Product Returns and Profitability")
 st.plotly_chart(
     product_returns_profitability_chart(filtered),
-    use_container_width=True,
+    width="stretch",
 )
 st.caption(
-    "Return rate by value is Return Amount divided by Net Sales. "
-    "Bubble size represents Net Sales; investigate high-return, "
-    "low-margin subcategories rather than assuming returns caused "
-    "the margin outcome."
+    "Return rate = Return Amount ÷ Net Sales. "
+    "Bubble size represents Net Sales. High-return, low-margin subcategories may warrant investigation; "
+    "this relationship does not establish causation."
+)
+
+
+
+
+# ---------------------------------------------------------------------
+# Product drill-down (Category -> Subcategory -> Product)
+# ---------------------------------------------------------------------
+st.subheader("Product Category Sales and Profitability")
+st.caption(
+    "Explore product performance within the active dashboard filters. "
+    "Selections here affect only this section, not the dashboard-wide KPIs."
+)
+
+product_filter_col1, product_filter_col2, product_filter_col3 = st.columns(3)
+
+
+def reset_product_subcategory_selection():
+    st.session_state["product_subcategory_selector"] = "All subcategories"
+    st.session_state["product_item_selector"] = "All products"
+
+
+def reset_product_item_selection():
+    st.session_state["product_item_selector"] = "All products"
+
+
+product_categories = sorted(
+    filtered["Product_Category"].dropna().unique().tolist()
+)
+if st.session_state.get("product_category_selector", "All categories") not in (
+    ["All categories"] + product_categories
+):
+    st.session_state["product_category_selector"] = "All categories"
+
+with product_filter_col1:
+    selected_product_category = st.selectbox(
+        "Explore product category",
+        ["All categories"] + product_categories,
+        key="product_category_selector",
+        on_change=reset_product_subcategory_selection,
+    )
+
+product_scope = filtered.copy()
+if selected_product_category != "All categories":
+    product_scope = product_scope[
+        product_scope["Product_Category"] == selected_product_category
+    ]
+
+product_subcategories = sorted(
+    product_scope["Product_Subcategory"].dropna().unique().tolist()
+)
+if st.session_state.get("product_subcategory_selector", "All subcategories") not in (
+    ["All subcategories"] + product_subcategories
+):
+    st.session_state["product_subcategory_selector"] = "All subcategories"
+
+with product_filter_col2:
+    selected_product_subcategory = st.selectbox(
+        "Explore subcategory",
+        ["All subcategories"] + product_subcategories,
+        key="product_subcategory_selector",
+        on_change=reset_product_item_selection,
+    )
+
+if selected_product_subcategory != "All subcategories":
+    product_scope = product_scope[
+        product_scope["Product_Subcategory"] == selected_product_subcategory
+    ]
+
+product_items = sorted(product_scope["Product"].dropna().unique().tolist())
+if st.session_state.get("product_item_selector", "All products") not in (
+    ["All products"] + product_items
+):
+    st.session_state["product_item_selector"] = "All products"
+
+with product_filter_col3:
+    selected_product_item = st.selectbox(
+        "Explore product",
+        ["All products"] + product_items,
+        key="product_item_selector",
+    )
+
+if selected_product_item != "All products":
+    product_scope = product_scope[
+        product_scope["Product"] == selected_product_item
+    ]
+
+if selected_product_item != "All products":
+    product_dimension = "Product"
+    product_level_label = "Selected product"
+elif selected_product_subcategory != "All subcategories":
+    product_dimension = "Product"
+    product_level_label = "Products within the selected subcategory"
+elif selected_product_category != "All categories":
+    product_dimension = "Product_Subcategory"
+    product_level_label = "Subcategories within the selected category"
+else:
+    product_dimension = "Product_Category"
+    product_level_label = "Product categories"
+
+product_summary = calculate_product_performance(
+    product_scope, product_dimension
+)
+if (
+    selected_product_category != "All categories"
+    or selected_product_subcategory != "All subcategories"
+    or selected_product_item != "All products"
+):
+    st.markdown(f"**{product_level_label}**")
+
+if product_summary.empty:
+    st.info("No product records match the current product selections.")
+else:
+    st.plotly_chart(
+        product_drilldown_chart(product_summary, product_dimension),
+        width="stretch",
+    )
+
+    product_display = product_summary.rename(
+        columns={
+            product_dimension: "Product Level",
+            "Net_Sales_M": "Net Sales (₹M)",
+            "Gross_Profit_M": "Gross Profit (₹M)",
+            "Gross_Margin_Pct": "Gross Margin (%)",
+            "Return_Amount_M": "Return Amount (₹M)",
+            "Return_Rate_Pct": "Return Rate (%)",
+            "Units": "Units",
+            "Orders": "Distinct Orders",
+            "Lines": "Transaction Lines",
+        }
+    )
+    product_columns = [
+        "Product Level", "Net Sales (₹M)", "Gross Profit (₹M)",
+        "Gross Margin (%)", "Return Amount (₹M)", "Return Rate (%)",
+        "Units", "Distinct Orders", "Transaction Lines",
+    ]
+    st.dataframe(
+        product_display[product_columns].style.format(
+            {
+                "Net Sales (₹M)": "{:,.2f}",
+                "Gross Profit (₹M)": "{:,.2f}",
+                "Gross Margin (%)": "{:.2f}%",
+                "Return Amount (₹M)": "{:,.2f}",
+                "Return Rate (%)": "{:.2f}%",
+                "Units": "{:,.0f}",
+                "Distinct Orders": "{:,.0f}",
+                "Transaction Lines": "{:,.0f}",
+            },
+            na_rep="—",
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+st.subheader("Discount vs. Profitability")
+discount_summary = calculate_discount_band_performance(
+    filtered, min_lines=20
+)
+if discount_summary.empty:
+    st.info(
+        "No discount band has at least 20 transaction lines in this selection. "
+        "Broaden the product selection to view a reliable comparison."
+    )
+else:
+    st.plotly_chart(
+        discount_band_performance_chart(discount_summary),
+        width="stretch",
+    )
+    st.caption(
+        "Bands with fewer than 20 transaction lines are excluded. "
+        "The relationship is descriptive and does not establish causation."
+    )
+
+
+# ---------------------------------------------------------------------
+# Customer segment performance
+# ---------------------------------------------------------------------
+st.subheader("Customer Segment Performance")
+
+segment_summary = summarize_performance(filtered, "Segment")
+segment_display = segment_summary[
+    [
+        "Segment",
+        "Customers",
+        "Net_Sales_M",
+        "Gross_Profit_M",
+        "Gross_Margin_Pct",
+        "Return_Rate_Pct",
+    ]
+].rename(
+    columns={
+        "Customers": "Distinct Customers",
+        "Net_Sales_M": "Net Sales (₹M)",
+        "Gross_Profit_M": "Gross Profit (₹M)",
+        "Gross_Margin_Pct": "Gross Margin (%)",
+        "Return_Rate_Pct": "Return Rate (%)",
+    }
+)
+
+st.dataframe(
+    segment_display.style.format(
+        {
+            "Distinct Customers": "{:,.0f}",
+            "Net Sales (₹M)": "{:,.2f}",
+            "Gross Profit (₹M)": "{:,.2f}",
+            "Gross Margin (%)": "{:.2f}%",
+            "Return Rate (%)": "{:.2f}%",
+        },
+        na_rep="—",
+    ),
+    width="stretch",
+    hide_index=True,
 )
 
 
@@ -553,7 +899,7 @@ st.markdown("**Top 15 Sales Representatives by Net Sales**")
 
 st.plotly_chart(
     representative_performance_chart(filtered),
-    use_container_width=True,
+    width="stretch",
 )
 
 # Full representative comparison table: includes all selected reps,
@@ -576,31 +922,35 @@ rep_table["Gross_Margin_Pct"] = (
 if {
     "Discount_Pct", "List_Unit_Price_INR", "Units"
 }.issubset(filtered.columns):
-    discount_work = filtered.copy()
-    discount_work["_list_value"] = (
-        discount_work["List_Unit_Price_INR"] * discount_work["Units"]
-    )
-    discount_work["_discount_value"] = (
-        discount_work["_list_value"] * discount_work["Discount_Pct"]
-    )
-    discount_table = (
-        discount_work.groupby("Sales_Rep")
-        .agg(
-            list_value=("_list_value", "sum"),
-            discount_value=("_discount_value", "sum"),
-        )
-    )
-    discount_table["Weighted_Discount_Pct"] = (
-        discount_table["discount_value"]
-        / discount_table["list_value"].replace(0, float("nan"))
-        * 100
+    discount_table = calculate_weighted_discount(
+        filtered, groupby="Sales_Rep"
     )
     rep_table = rep_table.merge(
-        discount_table[["Weighted_Discount_Pct"]],
-        left_on="Sales_Rep",
-        right_index=True,
-        how="left",
+        discount_table, on="Sales_Rep", how="left", validate="one_to_one"
     )
+
+# Compare representative targets by stable Sales_Rep_ID, not display name.
+# Target comparison covers complete months only; base performance stays on
+# the full selected date range and is labelled separately.
+show_rep_targets = target_comparable and not complete_months.empty
+if show_rep_targets:
+    rep_actuals = filtered[filtered["Month_Start"].isin(complete_months)]
+    rep_targets = targets[
+        targets["Month_Start"].isin(complete_months)
+        & targets["Region"].isin(regions)
+        & (targets["Sales_Rep"].isin(reps) if reps else True)
+    ]
+    rep_target_summary = calculate_target_performance_by_dimension(
+        rep_actuals, rep_targets, "Sales_Rep_ID"
+    )
+    rep_names = filtered[["Sales_Rep_ID", "Sales_Rep"]].drop_duplicates()
+    rep_target_summary = rep_target_summary.merge(
+        rep_names, on="Sales_Rep_ID", how="left", validate="one_to_one"
+    )
+    rep_table = rep_table.merge(
+        rep_target_summary[["Sales_Rep", "Actual_Sales_M", "Sales_Target_M", "Sales_Gap_M", "Sales_Attainment_Pct"]],
+        on="Sales_Rep", how="left", validate="one_to_one"
+    ).rename(columns={"Actual_Sales_M": "Comparable_Sales_M"})
 
 rep_table = rep_table.sort_values("Net_Sales_INR", ascending=False)
 rep_display = rep_table.rename(
@@ -622,6 +972,14 @@ display_columns = [
 if "Weighted Discount (%)" in rep_display.columns:
     display_columns.append("Weighted Discount (%)")
 display_columns += ["Distinct Orders"]
+if show_rep_targets:
+    rep_display = rep_display.rename(columns={
+        "Comparable_Sales_M": "Comparable Sales (₹M)",
+        "Sales_Target_M": "Sales Target (₹M)",
+        "Sales_Gap_M": "Sales Gap (₹M)",
+        "Sales_Attainment_Pct": "Sales Attainment (%)",
+    })
+    display_columns += ["Comparable Sales (₹M)", "Sales Target (₹M)", "Sales Gap (₹M)", "Sales Attainment (%)"]
 
 st.dataframe(
     rep_display[display_columns].style.format(
@@ -631,12 +989,18 @@ st.dataframe(
             "Gross Margin (%)": "{:.2f}%",
             "Weighted Discount (%)": "{:.2f}%",
             "Distinct Orders": "{:,.0f}",
+            "Comparable Sales (₹M)": "{:,.2f}",
+            "Sales Target (₹M)": "{:,.2f}",
+            "Sales Gap (₹M)": "{:,.2f}",
+            "Sales Attainment (%)": "{:.2f}%",
         },
         na_rep="—",
     ),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
+if show_rep_targets:
+    st.caption("Representative target comparison uses complete calendar months only; the other performance columns reflect the full selected date range.")
 
 
 # ---------------------------------------------------------------------
@@ -645,12 +1009,11 @@ st.dataframe(
 with st.expander("View filtered transaction data"):
     st.dataframe(
         filtered,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
 st.caption(
-    "Net Sales is reported before returns, consistent with the dataset "
-    "definition. Targets are compared only at their supported "
-    "representative-month aggregation level and for complete months."
+    "Net Sales is reported before returns. "
+    "Target comparisons use supported dimensions and complete months only."
 )
